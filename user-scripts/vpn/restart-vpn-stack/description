@@ -1,1 +1,1 @@
-Restarts the qBittorrent VPN container, waits 10s for the tunnel, verifies it came up, then restarts all dependent containers (SABnzbd, Prowlarr, Radarr, Sonarr, Jellyseerr, etc.).
+One-shot recovery script. Polls gluetun's Docker HEALTHCHECK in a loop (up to 120s) and restarts all dependent containers (qBittorrent, SABnzbd, Prowlarr, Radarr, Sonarr, Audioarr, Readarr, Jellyseerr) once the VPN tunnel is confirmed healthy. Uses a lock file to prevent concurrent runs. Called automatically by gluetun-vpn-monitor or run manually.

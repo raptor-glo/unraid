@@ -30,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../lib/common.sh"
 
 # --- Configuration -----------------------------------------------------------
-GLUETUN_CONTAINER="${GLUETUN_CONTAINER:-gluetun}"
+GLUETUN_CONTAINER="${GLUETUN_CONTAINER:-gluetunVPN}"
 POLL_INTERVAL="${POLL_INTERVAL:-10}"
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-120}"
 
@@ -70,7 +70,7 @@ gluetun_healthy() {
         *)
             # No HEALTHCHECK configured — fall back to gluetun's HTTP control server.
             # Port 8000 is gluetun's default control server port.
-            if curl -sf --max-time 3 "http://gluetun:8000/" &>/dev/null; then
+            if curl -sf --max-time 3 "http://$GLUETUN_CONTAINER:8000/" &>/dev/null; then
                 return 0
             fi
             return 1

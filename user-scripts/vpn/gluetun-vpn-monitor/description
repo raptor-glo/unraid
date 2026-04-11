@@ -1,1 +1,1 @@
-Monitors GluetunVPN, updates qBittorrent and MyAnonaMousee on IP/port changes, and sends Pushover alerts. Delegates to gluetun-monitor.sh in appdata (see script for instructions to bring it into version control).
+Long-running daemon. Polls gluetun's Docker HEALTHCHECK status every 10s and triggers restart-vpn-stack when the VPN tunnel recovers after a down event. Includes cooldown (120s) and lock-file protection against restart loops. Replaces the old stub that delegated to a non-version-controlled external file.
