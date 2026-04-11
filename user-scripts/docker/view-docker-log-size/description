@@ -1,0 +1,1 @@
+Displays the size of Docker container log files, sorted largest first. Useful for identifying runaway logging that may be filling docker.img.

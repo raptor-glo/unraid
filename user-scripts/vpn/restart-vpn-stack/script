@@ -1,0 +1,124 @@
+#!/bin/bash
+# =============================================================================
+# restart-vpn-stack
+#
+# One-shot recovery script. Waits for gluetun to be fully healthy (VPN tunnel
+# established), then restarts all containers that route traffic through it.
+#
+# Called automatically by gluetun-vpn-monitor on recovery, or run manually.
+#
+# Design:
+#   - Lock file prevents concurrent runs (e.g. if monitor fires twice quickly).
+#   - Polls Docker HEALTHCHECK status in a loop rather than sleeping a fixed
+#     number of seconds — restarts happen as soon as the tunnel is ready, not
+#     before it is, and not wastefully late.
+#   - Falls back to gluetun's HTTP control server if no HEALTHCHECK is set.
+#   - Each dependent is restarted individually so a single failure does not
+#     abort the rest, and failures are reported clearly.
+#   - Containers not found on the host are skipped (graceful partial stacks).
+#
+# Environment overrides (export before running to customise):
+#   GLUETUN_CONTAINER   name of the gluetun Docker container (default: gluetun)
+#   HEALTH_TIMEOUT      max seconds to wait for gluetun health (default: 120)
+#   HEALTH_POLL         seconds between health polls during wait (default: 5)
+# =============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+# --- Configuration -----------------------------------------------------------
+GLUETUN_CONTAINER="${GLUETUN_CONTAINER:-gluetun}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+HEALTH_POLL="${HEALTH_POLL:-5}"
+
+# All containers whose traffic routes through gluetun's network namespace.
+# These lose network when gluetun restarts and must be restarted after it
+# recovers. Containers not present on the host are silently skipped.
+DEPENDENTS=(
+    qbittorrent
+    sabnzbd
+    prowlarr
+    radarr
+    sonarr
+    audioarr
+    readarr
+    jellyseerr
+)
+
+LOCK_FILE="/tmp/restart-vpn-stack.lock"
+
+# --- Prevent concurrent runs -------------------------------------------------
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log_message "[restart] Another restart is already in progress (lock: $LOCK_FILE). Exiting."
+    exit 1
+fi
+
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+# --- Health check (mirrors the logic in gluetun-vpn-monitor) -----------------
+
+gluetun_healthy() {
+    local status
+    status=$(docker inspect --format='{{.State.Health.Status}}' "$GLUETUN_CONTAINER" 2>/dev/null)
+    case "$status" in
+        healthy)
+            return 0
+            ;;
+        unhealthy | starting)
+            return 1
+            ;;
+        *)
+            # No HEALTHCHECK — fall back to gluetun's HTTP control server.
+            curl -sf --max-time 3 "http://gluetun:8000/" &>/dev/null
+            ;;
+    esac
+}
+
+# --- Safety check: confirm gluetun container exists -------------------------
+if ! docker inspect "$GLUETUN_CONTAINER" &>/dev/null; then
+    log_message "[restart] ERROR: Container '$GLUETUN_CONTAINER' not found. Is gluetun running?"
+    exit 1
+fi
+
+# --- Wait for gluetun to be healthy -----------------------------------------
+log_message "[restart] Waiting for '$GLUETUN_CONTAINER' to be healthy (timeout: ${HEALTH_TIMEOUT}s)..."
+
+elapsed=0
+until gluetun_healthy; do
+    if (( elapsed >= HEALTH_TIMEOUT )); then
+        log_message "[restart] ERROR: '$GLUETUN_CONTAINER' was not healthy after ${HEALTH_TIMEOUT}s. Aborting dependent restarts."
+        exit 1
+    fi
+    log_message "[restart] Not healthy yet (${elapsed}s / ${HEALTH_TIMEOUT}s). Retrying in ${HEALTH_POLL}s..."
+    sleep "$HEALTH_POLL"
+    (( elapsed += HEALTH_POLL ))
+done
+
+log_message "[restart] '$GLUETUN_CONTAINER' is healthy. Restarting ${#DEPENDENTS[@]} dependent containers..."
+
+# --- Restart each dependent --------------------------------------------------
+failed=()
+
+for container in "${DEPENDENTS[@]}"; do
+    if ! docker inspect "$container" &>/dev/null; then
+        log_message "[restart] $container — not found on host, skipping."
+        continue
+    fi
+
+    log_message "[restart] Restarting $container..."
+    if docker restart "$container"; then
+        log_message "[restart] $container — OK."
+    else
+        log_message "[restart] $container — WARNING: restart command failed."
+        failed+=("$container")
+    fi
+done
+
+# --- Report ------------------------------------------------------------------
+if (( ${#failed[@]} > 0 )); then
+    log_message "[restart] Completed with errors. Failed containers: ${failed[*]}"
+    exit 1
+fi
+
+log_message "[restart] Done. All ${#DEPENDENTS[@]} containers restarted successfully."

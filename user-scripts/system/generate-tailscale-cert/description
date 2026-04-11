@@ -1,0 +1,1 @@
+Renews the Tailscale TLS certificate for the Unraid hostname, builds the PEM bundle, and deploys it to the Unraid WebGUI with an nginx reload.

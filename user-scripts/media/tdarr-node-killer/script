@@ -1,0 +1,137 @@
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+require_command curl
+require_command jq
+
+###################################
+# Simple Tdarr GPU Manager
+###################################
+
+# Container name
+CONTAINER_NAME="N1"
+
+# GPU Worker Settings
+IDLE_WORKERS=2      # Workers when Plex is idle
+ACTIVE_WORKERS=0    # Workers when Plex is transcoding
+
+# Polling
+CHECK_INTERVAL=5    # Seconds between checks
+
+###################################
+
+get_node_id() {
+    if [ -f "$TDARR_NODE_LOG_PATH" ]; then
+        grep -oP '"nodeID":\s*"\K[^"]+' "$TDARR_NODE_LOG_PATH" | tail -n1
+    fi
+}
+
+is_plex_transcoding() {
+    local response
+    response=$(curl -s "${TAUTULLI_URL}?apikey=${TAUTULLI_API_KEY}&cmd=get_activity")
+
+    if ! echo "$response" | jq . >/dev/null 2>&1; then
+        log_message "ERROR: Failed to get Tautulli response"
+        return 1
+    fi
+
+    local transcode_count
+    transcode_count=$(echo "$response" | jq -r '.response.data.stream_count_transcode // 0')
+
+    log_message "Plex transcode streams: $transcode_count"
+    [ "$transcode_count" -gt 0 ]
+}
+
+set_gpu_workers() {
+    local target_workers="$1"
+    local node_id
+    node_id=$(get_node_id)
+
+    if [ -z "$node_id" ]; then
+        log_message "ERROR: Could not find nodeID"
+        return 1
+    fi
+
+    local current_workers
+    current_workers=$(curl -s -X POST "${TDARR_API_URL}/api/v2/poll-worker-limits" \
+        -H "Content-Type: application/json" \
+        -d '{"data":{"nodeID":"'"$node_id"'"}}' | \
+        jq -r '.workerLimits.transcodegpu // 0')
+
+    if [ "$current_workers" = "$target_workers" ]; then
+        log_message "GPU workers already at target: $target_workers"
+        return 0
+    fi
+
+    log_message "Adjusting GPU workers: $current_workers -> $target_workers"
+
+    local diff=$(( target_workers - current_workers ))
+    local step="increase"
+    local count=$diff
+
+    if [ "$diff" -lt 0 ]; then
+        step="decrease"
+        count=$(( -diff ))
+    fi
+
+    for ((i=0; i<count; i++)); do
+        curl -s -X POST "${TDARR_API_URL}/api/v2/alter-worker-limit" \
+            -H "Content-Type: application/json" \
+            -d '{"data":{"nodeID":"'"$node_id"'","process":"'"$step"'","workerType":"transcodegpu"}}' \
+            >/dev/null 2>&1
+        sleep 1
+    done
+
+    log_message "GPU workers set to: $target_workers"
+}
+
+is_container_running() {
+    local status
+    status=$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)
+    [ "$status" = "true" ]
+}
+
+###################################
+# Main Loop
+###################################
+
+log_message "Starting Tdarr GPU Manager"
+log_message "Config: Idle=${IDLE_WORKERS}, Active=${ACTIVE_WORKERS}, Interval=${CHECK_INTERVAL}s"
+
+log_message "Testing Tautulli connection..."
+if ! curl -s "${TAUTULLI_URL}?apikey=${TAUTULLI_API_KEY}&cmd=get_activity" | jq . >/dev/null 2>&1; then
+    log_message "ERROR: Cannot connect to Tautulli at $TAUTULLI_URL"
+    exit 1
+fi
+log_message "Tautulli connection OK"
+
+last_state=""
+last_workers=""
+
+while true; do
+    if ! is_container_running; then
+        log_message "Starting container: $CONTAINER_NAME"
+        docker start "$CONTAINER_NAME" >/dev/null 2>&1
+        sleep 3
+        continue
+    fi
+
+    if is_plex_transcoding; then
+        current_state="transcoding"
+        target_workers=$ACTIVE_WORKERS
+    else
+        current_state="idle"
+        target_workers=$IDLE_WORKERS
+    fi
+
+    if [ "$current_state" != "$last_state" ] || [ "$target_workers" != "$last_workers" ]; then
+        log_message "State: $current_state -> Setting GPU workers to: $target_workers"
+        set_gpu_workers "$target_workers"
+        last_state="$current_state"
+        last_workers="$target_workers"
+    fi
+
+    sleep "$CHECK_INTERVAL"
+done

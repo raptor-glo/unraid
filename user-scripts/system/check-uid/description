@@ -1,0 +1,1 @@
+Prints the UID/GID the script runs as and tests write permissions to the appdata directory. Cleans up the test file afterwards. Useful for debugging permission issues.

@@ -1,0 +1,18 @@
+#!/bin/bash
+
+TEST_FILE="$APPDATA_NVME/uid-test-file"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+echo "Running as:"
+id
+echo
+echo "Testing write access to $TEST_FILE..."
+if touch "$TEST_FILE" 2>/dev/null; then
+    ls -l "$TEST_FILE"
+    rm -f "$TEST_FILE"
+    echo "Write permission: OK (test file removed)"
+else
+    echo "Write permission: DENIED"
+fi

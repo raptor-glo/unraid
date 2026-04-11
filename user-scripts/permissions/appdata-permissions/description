@@ -1,0 +1,1 @@
+Audits or fixes ownership of all appdata folders. Run without arguments for a dry-run audit. Pass --fix to apply chown corrections. Logs fixes to /boot/logs/.

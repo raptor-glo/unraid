@@ -1,0 +1,75 @@
+#!/bin/bash
+
+remove_orphaned_images="no"       # set to "yes" to remove orphaned images
+remove_unconnected_volumes="no"   # set to "yes" to remove unconnected volumes
+
+echo "##################################################################################"
+echo "Cleanup before starting (if requested in script)"
+echo "##################################################################################"
+echo
+
+if [ "$remove_orphaned_images" == "yes" ]; then
+    echo "Removing orphaned images..."
+    echo
+    docker image prune -af
+else
+    echo "Not removing orphaned images (set remove_orphaned_images=yes in script to enable)"
+fi
+
+echo
+echo "---------------------------------------------------------------------------------"
+echo
+
+if [ "$remove_unconnected_volumes" == "yes" ]; then
+    echo "Removing unconnected docker volumes"
+    echo
+    docker volume prune -f
+else
+    echo "Not removing unconnected docker volumes (set remove_unconnected_volumes=yes in script to enable)"
+fi
+
+echo
+echo "##################################################################################"
+echo "Image, container and volume disk usage"
+echo "##################################################################################"
+echo
+docker system df --format 'There are \t {{.TotalCount}} \t {{.Type}} \t taking up ......{{.Size}}'
+
+echo
+echo "##################################################################################"
+echo "Containers with size and virtual size"
+echo "##################################################################################"
+echo
+echo "First size is writable layers; virtual size includes read-only layers"
+echo
+docker container ls -a --format '{{.Size}} \t Is being taken up by ......... {{.Image}}'
+
+echo
+echo "##################################################################################"
+echo "Images sorted by size"
+echo "##################################################################################"
+echo
+docker image ls --format "{{.Repository}} {{.Size}}" | \
+awk '{if ($2~/GB/) print substr($2, 1, length($2)-2) *1000 "MB - " $1 ; else print $2 " - " $1 }' | \
+sed '/^0/d' | \
+sort -nr
+
+echo
+echo "##################################################################################"
+echo "Docker volumes with connected containers and sizes"
+echo "##################################################################################"
+echo
+volumes=$(docker volume ls --format '{{.Name}}')
+for volume in $volumes; do
+    name=$(docker ps -a --filter volume="$volume" --format '{{.Names}}' | sed 's/^/  /')
+    size=$(du -sh "$(docker volume inspect --format '{{ .Mountpoint }}' "$volume")" | cut -f -1)
+    echo "ID" "$volume"
+    echo "Connected to" $name "— size:" $size
+    echo ""
+done
+
+echo
+echo "##################################################################################"
+echo
+echo "Done. Scroll up to view results."
+exit

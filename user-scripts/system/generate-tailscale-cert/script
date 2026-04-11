@@ -1,0 +1,27 @@
+#!/bin/bash
+
+CERT_DIR="/boot/config/plugins/tailscale/certs"
+mkdir -p "$CERT_DIR"
+
+source /boot/config/ident.cfg
+FQDN=$(hostname).${LOCAL_TLD%%[[:cntrl:]]}
+
+echo "Renewing Tailscale certificate for: $FQDN"
+tailscale cert "$FQDN"
+
+if [ ! -f "$CERT_DIR/$FQDN.crt" ] || [ ! -f "$CERT_DIR/$FQDN.key" ]; then
+    echo "ERROR: Certificate files not found after renewal. Aborting."
+    exit 1
+fi
+
+echo "Building PEM bundle..."
+cat "$CERT_DIR/$FQDN.crt" >  "$CERT_DIR/$FQDN.pem"
+cat "$CERT_DIR/$FQDN.key" >> "$CERT_DIR/$FQDN.pem"
+
+echo "Deploying to Unraid WebGUI..."
+cp -v "$CERT_DIR/$FQDN.pem" "/boot/config/ssl/certs/$(hostname)_unraid_bundle.pem"
+
+echo "Reloading nginx..."
+/etc/rc.d/rc.nginx reload
+
+echo "Done."

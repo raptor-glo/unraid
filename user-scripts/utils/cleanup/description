@@ -1,0 +1,1 @@
+Runs routine cleanup tasks: removes dangling Docker images and deletes macOS .DS_Store files from the array. Reports counts before acting.

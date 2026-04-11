@@ -1,0 +1,1 @@
+Dynamically adjusts Tdarr GPU worker count based on Plex transcoding activity. Polls Tautulli every 5 seconds — reduces GPU workers to 0 when Plex is transcoding, restores them when idle.

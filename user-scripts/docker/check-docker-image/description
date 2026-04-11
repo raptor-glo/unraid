@@ -1,0 +1,1 @@
+Reports Docker disk usage: image, container and volume sizes. Optionally prunes orphaned images and unconnected volumes (disabled by default).

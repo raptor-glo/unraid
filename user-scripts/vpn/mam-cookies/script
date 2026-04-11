@@ -1,0 +1,63 @@
+#!/bin/bash
+# Updates the MyAnonaMousee dynamic seedbox API when the VPN IP changes.
+#
+# NOTE: gluetun-vpn-monitor also handles MAM IP updates. Once gluetun-monitor.sh
+# is tracked in this repo, consider consolidating these two scripts.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+require_command curl
+require_command jq
+
+API_URL="https://t.myanonamouse.net/json/dynamicSeedbox.php"
+
+if [ ! -f "$MAM_COOKIE_FILE" ]; then
+    echo "Error: Cookie file not found at $MAM_COOKIE_FILE. Please initialise the cookie first."
+    exit 1
+fi
+
+current_ip=$(docker exec qbittorrent curl -s ifconfig.me)
+if [ -z "$current_ip" ]; then
+    echo "Error: Unable to fetch current VPN IP from the qbittorrent container."
+    exit 1
+fi
+echo "Current VPN IP: $current_ip"
+
+if [ ! -f "$MAM_PREVIOUS_IP_FILE" ]; then
+    echo "No previous IP on record. Saving current IP and exiting."
+    echo "$current_ip" > "$MAM_PREVIOUS_IP_FILE"
+    exit 0
+fi
+
+previous_ip=$(cat "$MAM_PREVIOUS_IP_FILE")
+if [ -z "$previous_ip" ]; then
+    echo "Warning: Previous IP file is empty. Initialising with current IP."
+    echo "$current_ip" > "$MAM_PREVIOUS_IP_FILE"
+    exit 0
+fi
+echo "Previous VPN IP: $previous_ip"
+
+if [ "$current_ip" = "$previous_ip" ]; then
+    echo "VPN IP unchanged. No action required."
+    exit 0
+fi
+
+echo "VPN IP changed. Updating MAM API..."
+response=$(curl -s --cookie "$MAM_COOKIE_FILE" "$API_URL")
+
+if ! echo "$response" | jq . >/dev/null 2>&1; then
+    echo "Error: Invalid JSON response from MAM API: $response"
+    exit 1
+fi
+
+success=$(echo "$response" | jq -r '.Success')
+msg=$(echo "$response" | jq -r '.msg')
+
+if [ "$success" != "true" ]; then
+    echo "Error: MAM API call failed — $msg"
+    exit 1
+fi
+
+echo "$current_ip" > "$MAM_PREVIOUS_IP_FILE"
+echo "MAM API updated successfully. Message: $msg"

@@ -1,0 +1,41 @@
+#!/bin/bash
+# Runs all routine cleanup tasks:
+#   1. Remove dangling Docker images
+#   2. Delete macOS .DS_Store files from the array
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+require_command docker
+require_command find
+
+echo "=== System Cleanup ==="
+echo "Started: $(date)"
+echo
+
+# --- Dangling Docker images ---
+echo "--- Dangling Docker images ---"
+dangling=$(docker images --quiet --filter "dangling=true")
+if [ -n "$dangling" ]; then
+    count=$(echo "$dangling" | wc -l)
+    echo "Found $count dangling image(s). Removing..."
+    echo "$dangling" | xargs docker rmi
+    echo "Done."
+else
+    echo "No dangling images found."
+fi
+echo
+
+# --- macOS .DS_Store files ---
+echo "--- .DS_Store files ---"
+count=$(find /mnt/user -type f -name ".DS_Store" 2>/dev/null | wc -l)
+if [ "$count" -gt 0 ]; then
+    echo "Found $count .DS_Store file(s). Deleting..."
+    find /mnt/user -type f -name ".DS_Store" -delete
+    echo "Done."
+else
+    echo "No .DS_Store files found."
+fi
+
+echo
+echo "Cleanup complete: $(date)"

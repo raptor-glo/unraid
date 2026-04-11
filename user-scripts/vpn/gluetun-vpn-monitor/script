@@ -1,0 +1,140 @@
+#!/bin/bash
+# =============================================================================
+# gluetun-vpn-monitor
+#
+# Long-running daemon. Polls gluetun's health every POLL_INTERVAL seconds and
+# restarts dependent containers once the VPN tunnel recovers after a down event.
+#
+# Replaces the old stub that delegated to a non-version-controlled external
+# file. All logic now lives here.
+#
+# Design:
+#   - Uses Docker HEALTHCHECK status ("healthy") as the readiness signal.
+#     This is authoritative: gluetun's own healthcheck binary only exits 0
+#     when the tunnel is established and traffic can flow.
+#   - Falls back to probing gluetun's HTTP control server if no HEALTHCHECK
+#     is configured on the container.
+#   - Tracks prev_healthy to detect the unhealthy→healthy transition — the
+#     only event that should trigger a dependent restart.
+#   - Cooldown file prevents re-triggering within COOLDOWN_SECONDS of the
+#     last restart, guarding against gluetun's own reconnect flapping.
+#   - Lock file ensures only one monitor instance runs at a time.
+#
+# Environment overrides (export before running to customise):
+#   GLUETUN_CONTAINER   name of the gluetun Docker container (default: gluetun)
+#   POLL_INTERVAL       seconds between health polls (default: 10)
+#   COOLDOWN_SECONDS    minimum gap between restart triggers (default: 120)
+# =============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+# --- Configuration -----------------------------------------------------------
+GLUETUN_CONTAINER="${GLUETUN_CONTAINER:-gluetun}"
+POLL_INTERVAL="${POLL_INTERVAL:-10}"
+COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-120}"
+
+LOCK_FILE="/tmp/gluetun-monitor.lock"
+COOLDOWN_FILE="/tmp/gluetun-monitor-cooldown"
+RESTART_SCRIPT="$SCRIPT_DIR/../restart-vpn-stack/script"
+
+# --- Prevent multiple monitor instances --------------------------------------
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log_message "[monitor] Another instance is already running (lock: $LOCK_FILE). Exiting."
+    exit 1
+fi
+
+trap 'rm -f "$LOCK_FILE"; log_message "[monitor] Shutting down."' EXIT INT TERM
+
+# --- Health check helpers ----------------------------------------------------
+
+_gluetun_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$GLUETUN_CONTAINER" 2>/dev/null)" == "true" ]]
+}
+
+_docker_health_status() {
+    docker inspect --format='{{.State.Health.Status}}' "$GLUETUN_CONTAINER" 2>/dev/null
+}
+
+gluetun_healthy() {
+    local status
+    status=$(_docker_health_status)
+    case "$status" in
+        healthy)
+            return 0
+            ;;
+        unhealthy | starting)
+            return 1
+            ;;
+        *)
+            # No HEALTHCHECK configured — fall back to gluetun's HTTP control server.
+            # Port 8000 is gluetun's default control server port.
+            if curl -sf --max-time 3 "http://gluetun:8000/" &>/dev/null; then
+                return 0
+            fi
+            return 1
+            ;;
+    esac
+}
+
+# --- Cooldown ----------------------------------------------------------------
+
+in_cooldown() {
+    [[ -f "$COOLDOWN_FILE" ]] || return 1
+    local last elapsed
+    last=$(cat "$COOLDOWN_FILE" 2>/dev/null)
+    elapsed=$(( $(date +%s) - ${last:-0} ))
+    if (( elapsed < COOLDOWN_SECONDS )); then
+        log_message "[monitor] Cooldown active: ${elapsed}s elapsed of ${COOLDOWN_SECONDS}s required. Skipping trigger."
+        return 0
+    fi
+    return 1
+}
+
+set_cooldown() {
+    date +%s > "$COOLDOWN_FILE"
+}
+
+# --- Main loop ---------------------------------------------------------------
+
+log_message "[monitor] Starting. container='$GLUETUN_CONTAINER'  poll=${POLL_INTERVAL}s  cooldown=${COOLDOWN_SECONDS}s"
+
+# Initialise as healthy so we don't trigger a spurious restart at launch when
+# gluetun is already up. The monitor only acts on recovery transitions.
+prev_healthy=true
+
+while true; do
+    sleep "$POLL_INTERVAL"
+
+    # --- Check container is actually running first ---------------------------
+    if ! _gluetun_running; then
+        if $prev_healthy; then
+            log_message "[monitor] gluetun container has STOPPED. Waiting for Docker to restart it..."
+        fi
+        prev_healthy=false
+        continue
+    fi
+
+    # --- Evaluate VPN tunnel health ------------------------------------------
+    if gluetun_healthy; then
+        if ! $prev_healthy; then
+            log_message "[monitor] gluetun has RECOVERED (VPN tunnel is healthy)."
+            if in_cooldown; then
+                : # cooldown message already logged inside in_cooldown()
+            else
+                log_message "[monitor] Triggering restart-vpn-stack..."
+                set_cooldown
+                bash "$RESTART_SCRIPT"
+                log_message "[monitor] restart-vpn-stack returned. Resuming monitoring."
+            fi
+        fi
+        prev_healthy=true
+    else
+        if $prev_healthy; then
+            status=$(_docker_health_status)
+            log_message "[monitor] gluetun is UNHEALTHY. Docker health status: '${status:-no-healthcheck}'. Waiting for recovery..."
+        fi
+        prev_healthy=false
+    fi
+done

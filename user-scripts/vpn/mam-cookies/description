@@ -1,0 +1,1 @@
+Detects VPN IP changes in the qBittorrent container and updates the MyAnonaMousee dynamic seedbox API. Only acts when the IP has changed. Requires a valid MAM session cookie.

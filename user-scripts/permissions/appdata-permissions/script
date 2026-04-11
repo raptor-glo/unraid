@@ -1,0 +1,80 @@
+#!/bin/bash
+# Usage: script [--fix]
+#
+# Without --fix: audit mode — reports ownership mismatches, no changes made.
+# With --fix:    fix mode   — applies chown -R to correct all mismatches, logs to /boot/logs/.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../lib/common.sh"
+
+DRY_RUN=true
+[[ "${1:-}" == "--fix" ]] && DRY_RUN=false
+
+# Single source of truth for container → expected UID:GID
+get_expected() {
+    case "$1" in
+        huntarr|immich-redis)
+            echo "0:0" ;;
+        immich-postgres|mariadb)
+            echo "999:999" ;;
+        brave|czkawka|flaresolverr|krusader|lidarr|prowlarr|qbittorrent|qdirstat|prometheus|prometheus-data|sabnzbd|sonarr)
+            echo "99:100" ;;
+        adguard|agregarr|audiobookshelf|gluetun|immich|immich-auto-albums|immich-frame|\
+        jellyseerr|minecraft-bedrock|myspeed|nginx-proxy-manager|nextcloud|plex|radarr|tautulli|photoprism)
+            echo "1000:1000" ;;
+        *)
+            echo "unknown" ;;
+    esac
+}
+
+check_or_fix() {
+    local path="$1"
+    local expected="$2"
+    local name
+    name=$(basename "$path")
+
+    if [ ! -d "$path" ]; then
+        echo "SKIP: $name (not found)"
+        return
+    fi
+
+    local current
+    current=$(stat -c "%u:%g" "$path")
+
+    if [ "$expected" = "unknown" ]; then
+        echo "INFO: $name — unmapped (current: $current)"
+    elif [ "$current" = "$expected" ]; then
+        echo "OK:   $name — $current"
+    elif $DRY_RUN; then
+        echo "WARN: $name — current: $current, expected: $expected"
+    else
+        local uid="${expected%:*}"
+        local gid="${expected#*:}"
+        chown -R "$uid:$gid" "$path"
+        echo "FIX:  $name — $current -> $expected"
+    fi
+}
+
+# Setup output (fix mode logs to file)
+if $DRY_RUN; then
+    echo "=== Appdata Permission Audit ==="
+    echo "Dry run — pass --fix to apply changes."
+else
+    LOGFILE=$(log_file "appdata-permissions")
+    exec > >(tee -a "$LOGFILE") 2>&1
+    echo "=== Appdata Permission Fix ==="
+    echo "Log: $LOGFILE"
+fi
+echo "Started: $(date)"
+echo
+
+for DIR in "$APPDATA_NVME"/*/; do
+    [ -d "$DIR" ] || continue
+    check_or_fix "$DIR" "$(get_expected "$(basename "$DIR")")"
+done
+
+echo
+check_or_fix "$PHOTOPRISM_PATH" "1000:1000"
+
+echo
+echo "Finished: $(date)"

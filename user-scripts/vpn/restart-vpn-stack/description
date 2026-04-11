@@ -1,0 +1,1 @@
+Restarts the qBittorrent VPN container, waits 10s for the tunnel, verifies it came up, then restarts all dependent containers (SABnzbd, Prowlarr, Radarr, Sonarr, Jellyseerr, etc.).
