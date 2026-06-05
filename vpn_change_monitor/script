@@ -1,0 +1,168 @@
+#!/bin/bash
+
+GLUETUN_API="http://localhost:8000"
+FORWARDED_PORT_FILE="/mnt/user/appdata/gluetun/forwarded_port"
+LAST_IP_FILE="/mnt/user/appdata/gluetun/last_ip"
+LAST_PORT_FILE="/mnt/user/appdata/gluetun/last_port"
+LAST_MAM_UPDATE_FILE="/mnt/user/appdata/gluetun/last_mam_update"
+MAM_COOKIE_PATH="/mnt/user/appdata/gluetun/mam.cookies"
+MAM_URL="https://t.myanonamouse.net/json/dynamicSeedbox.php"
+QBITTORRENT_HOST="localhost:8060"
+LOG_FILE="/tmp/vpn_change_monitor.log"
+LOCK_FILE="/tmp/vpn_change_monitor.lock"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CREDENTIALS_FILE="${SCRIPT_DIR}/credentials.env"
+if [[ ! -f "$CREDENTIALS_FILE" ]]; then
+    echo "Missing credentials file: ${CREDENTIALS_FILE}" >&2
+    exit 1
+fi
+source "$CREDENTIALS_FILE"
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    exit 0
+fi
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
+trim_log() {
+    if [[ -f "$LOG_FILE" ]]; then
+        local tmp
+        tmp=$(tail -n 500 "$LOG_FILE")
+        echo "$tmp" > "$LOG_FILE"
+    fi
+}
+
+send_pushover() {
+    local title="$1"
+    local message="$2"
+    curl -s \
+        --form-string "token=${PUSHOVER_TOKEN}" \
+        --form-string "user=${PUSHOVER_USER}" \
+        --form-string "title=${title}" \
+        --form-string "message=${message}" \
+        --form-string "html=1" \
+        https://api.pushover.net/1/messages.json > /dev/null
+}
+
+get_current_ip() {
+    curl -s -u "${GLUETUN_USER}:${GLUETUN_PASS}" "${GLUETUN_API}/v1/publicip/ip" \
+        | grep -o '"public_ip":"[^"]*"' \
+        | cut -d'"' -f4
+}
+
+get_current_port() {
+    if [[ ! -f "$FORWARDED_PORT_FILE" ]]; then
+        echo ""
+        return
+    fi
+    local port
+    port=$(tr -d '[:space:]' < "$FORWARDED_PORT_FILE")
+    echo "$port"
+}
+
+update_qbittorrent_port() {
+    local port="$1"
+    local qb_cookies="/tmp/qb_monitor_cookies.txt"
+
+    local login_result
+    login_result=$(curl -s -c "$qb_cookies" \
+        --data-urlencode "username=${QBITTORRENT_USER}" \
+        --data-urlencode "password=${QBITTORRENT_PASS}" \
+        "http://${QBITTORRENT_HOST}/api/v2/auth/login")
+
+    if [[ "$login_result" != "Ok." ]]; then
+        log "qBittorrent login failed: ${login_result}"
+        return 1
+    fi
+
+    local set_result
+    set_result=$(curl -s -b "$qb_cookies" \
+        --data-urlencode "json={\"listen_port\":${port}}" \
+        "http://${QBITTORRENT_HOST}/api/v2/app/setPreferences")
+
+    if [[ $? -eq 0 ]]; then
+        log "qBittorrent listen port updated to ${port}"
+    else
+        log "qBittorrent setPreferences failed (exit code $?): ${set_result}"
+    fi
+}
+
+update_mam_ip() {
+    local now
+    now=$(date +%s)
+
+    if [[ -f "$LAST_MAM_UPDATE_FILE" ]]; then
+        local last_update
+        last_update=$(cat "$LAST_MAM_UPDATE_FILE" 2>/dev/null)
+        if [[ -n "$last_update" ]] && (( now - last_update < 3600 )); then
+            log "MAM update skipped (last update was $(( now - last_update ))s ago)"
+            mam_updated="skipped"
+            return
+        fi
+    fi
+
+    local mam_cookie
+    mam_cookie=$(grep "mam_id" "$MAM_COOKIE_PATH" | awk '{print $NF}')
+    local response
+    response=$(docker exec gluetunVPN wget -qO- --timeout=10 \
+        --header="Cookie: mam_id=${mam_cookie}" \
+        "$MAM_URL" 2>/dev/null)
+
+    local success
+    success=$(echo "$response" | grep -o '"Success":[^,}]*' | cut -d':' -f2 | tr -d '[:space:]"')
+
+    if [[ "$success" == "true" || "$success" == "1" ]]; then
+        log "MAM dynamic seedbox IP updated successfully"
+        echo "$now" > "$LAST_MAM_UPDATE_FILE"
+        mam_updated="true"
+    else
+        log "MAM dynamic seedbox update failed: ${response}"
+        mam_updated="false"
+    fi
+}
+
+# Main logic
+
+CURRENT_IP=$(get_current_ip)
+if [[ -z "$CURRENT_IP" ]]; then
+    log "Could not fetch public IP"
+    trim_log
+    exit 1
+fi
+
+CURRENT_PORT=$(get_current_port)
+if [[ -z "$CURRENT_PORT" ]]; then
+    log "No forwarded port yet, skipping"
+    trim_log
+    exit 0
+fi
+
+LAST_IP=$(cat "$LAST_IP_FILE" 2>/dev/null)
+LAST_PORT=$(cat "$LAST_PORT_FILE" 2>/dev/null)
+
+if [[ "$CURRENT_IP" != "$LAST_IP" || "$CURRENT_PORT" != "$LAST_PORT" ]]; then
+    [[ "$CURRENT_IP" != "$LAST_IP" ]]     && log "IP changed: ${LAST_IP:-none} -> ${CURRENT_IP}"
+    [[ "$CURRENT_PORT" != "$LAST_PORT" ]] && log "Port changed: ${LAST_PORT:-none} -> ${CURRENT_PORT}"
+
+    mam_updated=""
+    update_qbittorrent_port "$CURRENT_PORT"
+    update_mam_ip
+
+    echo "$CURRENT_IP"   > "$LAST_IP_FILE"
+    echo "$CURRENT_PORT" > "$LAST_PORT_FILE"
+
+    case "$mam_updated" in
+        true)    mam_status="MAM: updated" ;;
+        false)   mam_status="MAM: update failed" ;;
+        skipped) mam_status="MAM: skipped (updated recently)" ;;
+        *)       mam_status="MAM: unknown" ;;
+    esac
+
+    send_pushover "GluetunVPN Updated" "New IP: <b>${CURRENT_IP}</b> | Port: <b>${CURRENT_PORT}</b> | ${mam_status}"
+fi
+
+trim_log
