@@ -2,8 +2,15 @@
 
 LOCK_FILE="/tmp/gluetun_watchdog.lock"
 LOG_FILE="/tmp/gluetun_watchdog.log"
-PUSHOVER_USER="REDACTED"
-PUSHOVER_TOKEN="REDACTED"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CREDENTIALS_FILE="${SCRIPT_DIR}/credentials.env"
+if [[ ! -f "$CREDENTIALS_FILE" ]]; then
+    echo "Missing credentials file: ${CREDENTIALS_FILE}" >&2
+    exit 1
+fi
+# shellcheck source=credentials.env
+source "$CREDENTIALS_FILE"
 
 STOP_ORDER=(huntarr lidarr sonarr radarr prowlarr qbittorrent sabnzbd flaresolverr brave)
 START_ORDER=(brave flaresolverr sabnzbd qbittorrent prowlarr radarr sonarr lidarr huntarr)
