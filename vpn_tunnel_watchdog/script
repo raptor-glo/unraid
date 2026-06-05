@@ -1,0 +1,126 @@
+#!/bin/bash
+
+LOCK_FILE="/tmp/gluetun_watchdog.lock"
+LOG_FILE="/tmp/gluetun_watchdog.log"
+PUSHOVER_USER="REDACTED"
+PUSHOVER_TOKEN="REDACTED"
+
+STOP_ORDER=(huntarr lidarr sonarr radarr prowlarr qbittorrent sabnzbd flaresolverr brave)
+START_ORDER=(brave flaresolverr sabnzbd qbittorrent prowlarr radarr sonarr lidarr huntarr)
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
+pushover() {
+    curl -s \
+        --form-string "token=${PUSHOVER_TOKEN}" \
+        --form-string "user=${PUSHOVER_USER}" \
+        --form-string "message=$1" \
+        https://api.pushover.net/1/messages.json > /dev/null
+}
+
+trim_log() {
+    if [[ -f "$LOG_FILE" ]]; then
+        local tmp
+        tmp=$(tail -n 500 "$LOG_FILE")
+        echo "$tmp" > "$LOG_FILE"
+    fi
+}
+
+cleanup() {
+    trim_log
+}
+
+trap cleanup EXIT
+
+# Lock file check
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    exit 0
+fi
+
+check_tunnel() {
+    docker exec gluetunVPN wget -qO- --timeout=10 https://cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q "^ip="
+}
+
+check_containers() {
+    local failed=()
+    declare -A ports=(
+        [qbittorrent]=8060
+        [sabnzbd]=8080
+        [prowlarr]=9696
+        [radarr]=7878
+        [sonarr]=8989
+        [lidarr]=8686
+        [huntarr]=9705
+    )
+    for container in "${!ports[@]}"; do
+        port="${ports[$container]}"
+        if ! curl -s --max-time 5 "http://localhost:${port}" > /dev/null 2>&1; then
+            failed+=("$container")
+        fi
+    done
+    echo "${failed[@]}"
+}
+
+if check_tunnel; then
+    failed_containers=$(check_containers)
+    if [[ -z "$failed_containers" ]]; then
+        trim_log
+        exit 0
+    fi
+    log "Tunnel healthy but containers unreachable: ${failed_containers}. Restarting stack."
+    pushover "VPN containers unreachable. Restarting stack..."
+    for container in "${START_ORDER[@]}"; do
+        log "Restarting container: ${container}"
+        docker restart "$container" >> "$LOG_FILE" 2>&1
+    done
+    sleep 15
+    failed_after=$(check_containers)
+    if [[ -z "$failed_after" ]]; then
+        log "All containers recovered successfully."
+        pushover "VPN containers recovered after restart."
+    else
+        log "Containers still unreachable after restart: ${failed_after}"
+        pushover "VPN container recovery FAILED. Manual intervention required."
+    fi
+    trim_log
+    exit 0
+fi
+
+log "VPN tunnel connectivity check failed. Starting recovery sequence."
+pushover "Gluetun VPN tunnel is down. Starting recovery..."
+
+for container in "${STOP_ORDER[@]}"; do
+    log "Stopping container: ${container}"
+    docker stop "$container" >> "$LOG_FILE" 2>&1
+done
+
+log "Restarting gluetunVPN"
+docker restart gluetunVPN >> "$LOG_FILE" 2>&1
+
+log "Polling for VPN recovery (up to 12 attempts, 10s apart)..."
+recovered=false
+for attempt in $(seq 1 12); do
+    sleep 10
+    log "Recovery check attempt ${attempt}/12"
+    if check_tunnel; then
+        log "VPN tunnel recovered on attempt ${attempt}."
+        recovered=true
+        break
+    fi
+done
+
+if $recovered; then
+    for container in "${START_ORDER[@]}"; do
+        log "Starting container: ${container}"
+        docker start "$container" >> "$LOG_FILE" 2>&1
+    done
+    log "All containers restarted successfully."
+    pushover "Gluetun VPN recovered. All containers restarted."
+else
+    log "VPN recovery FAILED after 2 minutes. Manual intervention required."
+    pushover "Gluetun VPN recovery FAILED. Manual intervention required."
+    exit 1
+fi
