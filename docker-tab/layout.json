@@ -1,0 +1,120 @@
+{
+  "icon_base_url": "https://raw.githubusercontent.com/raptor-glo/unraid/main/icons/",
+  "start_wait_seconds": {
+    "gluetunVPN": 15
+  },
+  "folders": [
+    {
+      "id": "G8MmbE3f0Xn9g19gTOiAg4COP6o",
+      "name": "Network",
+      "icon": "folders/network.gif",
+      "why": "Starts first: eight containers route through gluetunVPN.",
+      "containers": [
+        "gluetunVPN",
+        "adguard-home",
+        "nginx-proxy-manager",
+        "cloudflare-ddns-home",
+        "cloudflare-ddns-unraid"
+      ]
+    },
+    {
+      "id": "TXWmon3r9t65DkG9ZtqaBR1fVXQ",
+      "name": "Media Server",
+      "icon": "folders/media-server.gif",
+      "containers": [
+        "plex",
+        "audiobookshelf",
+        "tautulli",
+        "agregarr"
+      ]
+    },
+    {
+      "id": "mc1ofrWZmFIShiKr5h2PE8aDb7M",
+      "name": "Media Automation",
+      "icon": "folders/media-automation.gif",
+      "containers": [
+        "prowlarr",
+        "flaresolverr",
+        "sonarr",
+        "radarr",
+        "lidarr",
+        "seerr"
+      ]
+    },
+    {
+      "id": "gKOsQRAaiQqEioIWnCVJDyGwRbY",
+      "name": "Downloaders",
+      "icon": "folders/downloaders.gif",
+      "containers": [
+        "qbittorrent",
+        "sabnzbd"
+      ]
+    },
+    {
+      "id": "hHTgTmWjvZ6G4kWnLFhR0p0HF0",
+      "name": "Photos",
+      "icon": "folders/photos.gif",
+      "containers": [
+        "immich-postgres",
+        "immich-redis",
+        "immich",
+        "immich-frame",
+        "immich-auto-albums"
+      ]
+    },
+    {
+      "id": "6gyx2o0k5F4ubhCIJJ6MAvJZyc",
+      "name": "Cloud",
+      "icon": "folders/cloud.gif",
+      "containers": [
+        "mariadb",
+        "raptor-cloud"
+      ]
+    },
+    {
+      "id": "sDDr9kEWaT9ECkzBB0YXJNuokI",
+      "name": "Toy Soldier Studios",
+      "icon": "folders/toy-soldier-studios.gif",
+      "why": "Studio apps join by the container label folder.view2: \"Toy Soldier Studios\"; list them here only until their compose files carry it.",
+      "containers": [
+        "cantodojo-backend-1",
+        "cantodojo-frontend-1"
+      ]
+    },
+    {
+      "id": "FzS6EmFEq3xROdj7DDMc2xFz6oE",
+      "name": "Gaming",
+      "icon": "folders/gaming.gif",
+      "why": "clash-royale sits here until it's migrated into the studio.",
+      "containers": [
+        "minecraft-bedrock-server",
+        "clash-royale"
+      ]
+    },
+    {
+      "id": "shaEiaqH06NNCuhiKse0DpjZci0",
+      "name": "Monitoring",
+      "icon": "folders/monitoring.gif",
+      "containers": [
+        "scrutiny",
+        "prometheus",
+        "speedtest-tracker"
+      ]
+    },
+    {
+      "id": "hOhClfSmoNNhu72tZedgUaaFfUs",
+      "name": "Tools",
+      "icon": "folders/tools.gif",
+      "containers": [
+        "code-server",
+        "krusader",
+        "brave",
+        "czkawka",
+        "qdirstat",
+        "Krokiet",
+        "MediaInfo",
+        "n8n"
+      ]
+    }
+  ]
+}
