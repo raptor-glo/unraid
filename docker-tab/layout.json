@@ -85,10 +85,8 @@
       "id": "FzS6EmFEq3xROdj7DDMc2xFz6oE",
       "name": "Gaming",
       "icon": "folders/gaming.gif",
-      "why": "clash-royale sits here until it's migrated into the studio.",
       "containers": [
-        "minecraft-bedrock-server",
-        "clash-royale"
+        "minecraft-bedrock-server"
       ]
     },
     {
